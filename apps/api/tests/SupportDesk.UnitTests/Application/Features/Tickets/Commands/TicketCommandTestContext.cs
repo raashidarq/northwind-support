@@ -3,6 +3,7 @@ using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
 using SupportDesk.Application.Features.Tickets.Commands.ChangeTicketStatus;
+using SupportDesk.Application.Features.Tickets.Commands.EscalateTicket;
 using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
 using SupportDesk.Domain.Aggregates.Agents;
@@ -56,7 +57,18 @@ internal sealed class TicketCommandTestContext
         AssignTicket = new AssignTicketCommandHandler(
             Tickets.Object, Agents.Object, UnitOfWork.Object, Clock, getTicket,
             NullLogger<AssignTicketCommandHandler>.Instance);
+
+        // Escalation returns the row it wrote, re-read from the history. Unsaved rows have id 0.
+        TicketQueries.Setup(q => q.GetEscalationsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new TicketEscalationDto(0, TicketPriority.Medium, TicketPriority.High, null, null, null,
+                Clock.UtcNow, "Customer is losing sales", "Team lead", Clock.UtcNow)]);
+
+        EscalateTicket = new EscalateTicketCommandHandler(
+            Tickets.Object, Customers.Object, Categories.Object, AgentQueries.Object, TicketQueries.Object,
+            UnitOfWork.Object, Clock, TestSla.Policy(), getTicket, NullLogger<EscalateTicketCommandHandler>.Instance);
     }
+
+    public EscalateTicketCommandHandler EscalateTicket { get; }
 
     public Mock<ITicketRepository> Tickets { get; } = new();
 

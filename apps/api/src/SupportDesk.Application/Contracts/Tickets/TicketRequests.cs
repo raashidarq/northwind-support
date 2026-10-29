@@ -15,3 +15,9 @@ public sealed record UpdateTicketStatusRequest(TicketStatus Status);
 
 /// <summary>Body of PATCH /api/tickets/{id}/assignment. A null agent unassigns the ticket.</summary>
 public sealed record AssignTicketRequest(int? AgentId);
+
+/// <summary>
+/// Body of POST /api/tickets/{id}/escalate. <c>EscalatedBy</c> names who escalated it until
+/// login (Task 3) can say so instead.
+/// </summary>
+public sealed record EscalateTicketRequest(string Reason, string EscalatedBy);

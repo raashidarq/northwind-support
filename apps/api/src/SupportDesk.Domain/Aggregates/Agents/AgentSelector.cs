@@ -51,4 +51,24 @@ public static class AgentSelector
         return new AgentSelection(chosen,
             $"Assigned to {chosen.FullName}, the eligible agent with the fewest open tickets ({chosen.OpenTickets}).");
     }
+
+    /// <summary>
+    /// BR-7: on escalation, keep the current agent if they are still eligible, otherwise
+    /// <see cref="Pick"/> again. The current agent's open count already includes this ticket,
+    /// so keeping it does not add to their load and is checked without it.
+    /// </summary>
+    public static AgentSelection KeepOrPick(
+        IEnumerable<AgentCandidate> agents, int? currentAgentId, int categoryId, bool requiresSpecialist)
+    {
+        var candidates = agents.ToList();
+        var current = candidates.FirstOrDefault(a => a.AgentId == currentAgentId);
+
+        if (current is not null
+            && IsEligible(current with { OpenTickets = current.OpenTickets - 1 }, categoryId, requiresSpecialist))
+        {
+            return new AgentSelection(current, $"Kept with {current.FullName}, who is still eligible.");
+        }
+
+        return Pick(candidates, categoryId, requiresSpecialist);
+    }
 }

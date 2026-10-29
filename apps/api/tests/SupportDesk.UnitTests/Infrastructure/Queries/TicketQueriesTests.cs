@@ -113,6 +113,28 @@ public sealed class TicketQueriesTests : IDisposable
         Assert.Equal(2, result.TotalCount);
     }
 
+    [Fact]
+    public async Task GetEscalations_ReturnsTheHistoryNewestFirstWithAgentNames()
+    {
+        // Medium and unassigned, so it can be escalated twice: to High, then Critical.
+        var ticket = _db.Set<Ticket>().Single(t => t.Reference == "TCK-0004");
+        var agentId = _db.Set<Agent>().Single().Id;
+        ticket.Escalate("First escalation", "Team lead", TestSla.Policy(), CustomerTier.Premium, agentId, Now.AddHours(1));
+        ticket.Escalate("Second escalation", "Team lead", TestSla.Policy(), CustomerTier.Premium, agentId, Now.AddHours(2));
+        await _db.SaveChangesAsync();
+
+        var history = await _queries.GetEscalationsAsync(ticket.Id, default);
+
+        Assert.NotNull(history);
+        Assert.Equal(["Second escalation", "First escalation"], history.Select(e => e.Reason));
+        Assert.Null(history[1].FromAgent);
+        Assert.Equal("Alex Turner", history[1].ToAgent?.FullName);
+    }
+
+    [Fact]
+    public async Task GetEscalations_ForAnUnknownTicket_IsNull() =>
+        Assert.Null(await _queries.GetEscalationsAsync(999, default));
+
     private static Ticket NewTicket(
         string reference, string title, Customer customer, Category category,
         TicketPriority priority, TicketStatus status, int? agentId)

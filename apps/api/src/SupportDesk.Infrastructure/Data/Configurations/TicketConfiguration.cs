@@ -59,6 +59,14 @@ public sealed class TicketConfiguration : IEntityTypeConfiguration<Ticket>
 
         builder.Ignore(t => t.IsOpen);
 
+        // The escalation history is part of the ticket and goes with it.
+        builder.HasMany(t => t.Escalations)
+            .WithOne()
+            .HasForeignKey(e => e.TicketId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Navigation(t => t.Escalations).UsePropertyAccessMode(PropertyAccessMode.Field);
+
         builder.HasIndex(t => t.Reference).IsUnique().HasDatabaseName("UQ_Tickets_Reference");
 
         // Covers the list screen's most common filter pair.

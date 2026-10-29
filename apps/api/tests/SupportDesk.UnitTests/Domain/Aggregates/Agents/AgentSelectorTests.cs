@@ -68,6 +68,41 @@ public class AgentSelectorTests
         Assert.StartsWith("Left unassigned", selection.Reason);
     }
 
+    // BR-7: re-evaluating the owner on escalation.
+
+    [Fact]
+    public void KeepOrPick_KeepsTheCurrentAgentWhenStillEligible()
+    {
+        var selection = AgentSelector.KeepOrPick([Agent(1, open: 5), Agent(2, open: 0)], currentAgentId: 1, General, requiresSpecialist: false);
+
+        Assert.Equal(1, selection.Agent?.AgentId);
+        Assert.StartsWith("Kept", selection.Reason);
+    }
+
+    [Fact]
+    public void KeepOrPick_KeepsAnAgentAtTheirLimit_BecauseThisTicketIsAlreadyTheirs()
+    {
+        var selection = AgentSelector.KeepOrPick([Agent(1, open: 6, max: 6), Agent(2, open: 0)], currentAgentId: 1, General, requiresSpecialist: false);
+
+        Assert.Equal(1, selection.Agent?.AgentId);
+    }
+
+    [Fact]
+    public void KeepOrPick_ReassignsWhenTheCurrentAgentIsNoLongerEligible()
+    {
+        var selection = AgentSelector.KeepOrPick([Agent(1, open: 1, isActive: false), Agent(2, open: 4)], currentAgentId: 1, General, requiresSpecialist: false);
+
+        Assert.Equal(2, selection.Agent?.AgentId);
+    }
+
+    [Fact]
+    public void KeepOrPick_AnUnassignedTicket_IsPickedForAsUsual()
+    {
+        var selection = AgentSelector.KeepOrPick([Agent(1, open: 3), Agent(2, open: 1)], currentAgentId: null, General, requiresSpecialist: false);
+
+        Assert.Equal(2, selection.Agent?.AgentId);
+    }
+
     private static AgentCandidate Agent(
         int id, int open, int max = 10, bool isActive = true, int[]? specializations = null) =>
         new(id, $"Agent {id}", isActive, max, specializations ?? [General], open);
