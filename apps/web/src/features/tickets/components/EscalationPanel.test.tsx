@@ -43,7 +43,6 @@ describe('EscalationPanel', () => {
     render(<EscalationPanel ticket={ticket} onUpdated={vi.fn()} />);
 
     await user.type(screen.getByLabelText('Reason'), '  Lost  ');
-    await user.type(screen.getByLabelText('Escalated by'), 'Team lead');
     await user.click(screen.getByRole('button', { name: 'Escalate one level' }));
 
     expect(screen.getByText('Give a reason of 5 to 500 characters.')).toBeInTheDocument();
@@ -59,7 +58,6 @@ describe('EscalationPanel', () => {
     render(<EscalationPanel ticket={ticket} onUpdated={onUpdated} />);
 
     await user.type(screen.getByLabelText('Reason'), 'Customer is losing sales');
-    await user.type(screen.getByLabelText('Escalated by'), 'Team lead');
     await user.click(screen.getByRole('button', { name: 'Escalate one level' }));
 
     await waitFor(() =>

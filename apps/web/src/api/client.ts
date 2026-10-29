@@ -1,3 +1,4 @@
+import { clearSession, getSession } from '../auth/session';
 import type { ProblemDetails } from '../types/api';
 
 /**
@@ -26,17 +27,26 @@ export class ApiError extends Error {
 }
 
 /**
- * The single place that talks to the API. Returns parsed JSON, or throws an
- * {@link ApiError} that callers can show to the user.
+ * The single place that talks to the API. Sends the signed-in agent's token with every
+ * request. Returns parsed JSON, or throws an {@link ApiError} that callers can show to the user.
  */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getSession()?.token;
+
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
   });
+
+  if (response.status === 401) {
+    // The token is missing, expired or no longer accepted: drop it, and the route guard sends
+    // the agent to the login page. (A failed login is also a 401; there is no session to drop.)
+    clearSession();
+  }
 
   if (!response.ok) {
     const problem = await readProblem(response);

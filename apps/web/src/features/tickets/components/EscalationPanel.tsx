@@ -18,8 +18,7 @@ interface EscalationPanelProps {
 /** Escalates the ticket one priority level, and shows its escalation history. */
 export function EscalationPanel({ ticket, onUpdated }: EscalationPanelProps) {
   const [reason, setReason] = useState('');
-  const [escalatedBy, setEscalatedBy] = useState('');
-  const [errors, setErrors] = useState<{ reason?: string; escalatedBy?: string }>({});
+  const [reasonError, setReasonError] = useState<string>();
   const [serverError, setServerError] = useState<string>();
   const [isSaving, setIsSaving] = useState(false);
 
@@ -37,17 +36,18 @@ export function EscalationPanel({ ticket, onUpdated }: EscalationPanelProps) {
     event.preventDefault();
     setServerError(undefined);
 
-    const found = validate(reason, escalatedBy);
-    setErrors(found);
+    const found = validateReason(reason);
+    setReasonError(found);
 
-    if (found.reason || found.escalatedBy) {
+    if (found) {
       return;
     }
 
     setIsSaving(true);
 
     try {
-      const result = await ticketsApi.escalate(ticket.id, { reason: reason.trim(), escalatedBy: escalatedBy.trim() });
+      // Who escalated it is the signed-in agent; the API reads that from the token.
+      const result = await ticketsApi.escalate(ticket.id, { reason: reason.trim() });
       onUpdated(result.ticket);
       setReason('');
       await history.reload();
@@ -68,7 +68,7 @@ export function EscalationPanel({ ticket, onUpdated }: EscalationPanelProps) {
         <Field
           id="escalation-reason"
           label="Reason"
-          error={errors.reason}
+          error={reasonError}
           hint={`${reasonMinLength} to ${reasonMaxLength} characters.`}
         >
           {(props) => (
@@ -78,17 +78,6 @@ export function EscalationPanel({ ticket, onUpdated }: EscalationPanelProps) {
               value={reason}
               disabled={Boolean(blockedBecause)}
               onChange={(event) => setReason(event.target.value)}
-            />
-          )}
-        </Field>
-
-        <Field id="escalation-by" label="Escalated by" error={errors.escalatedBy}>
-          {(props) => (
-            <input
-              {...props}
-              value={escalatedBy}
-              disabled={Boolean(blockedBecause)}
-              onChange={(event) => setEscalatedBy(event.target.value)}
             />
           )}
         </Field>
@@ -133,17 +122,10 @@ export function EscalationPanel({ ticket, onUpdated }: EscalationPanelProps) {
   );
 }
 
-function validate(reason: string, escalatedBy: string) {
-  const errors: { reason?: string; escalatedBy?: string } = {};
+function validateReason(reason: string): string | undefined {
   const length = reason.trim().length;
 
-  if (length < reasonMinLength || length > reasonMaxLength) {
-    errors.reason = `Give a reason of ${reasonMinLength} to ${reasonMaxLength} characters.`;
-  }
-
-  if (escalatedBy.trim() === '') {
-    errors.escalatedBy = 'Say who is escalating it.';
-  }
-
-  return errors;
+  return length < reasonMinLength || length > reasonMaxLength
+    ? `Give a reason of ${reasonMinLength} to ${reasonMaxLength} characters.`
+    : undefined;
 }

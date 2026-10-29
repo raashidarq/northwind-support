@@ -110,7 +110,6 @@ export interface EscalationResult {
 
 export interface EscalatePayload {
   reason: string;
-  escalatedBy: string;
 }
 
 /** Everything the ticket list screen can narrow the results by. */
@@ -182,4 +181,21 @@ export interface ProblemDetails {
   detail?: string;
   traceId?: string;
   errors?: Record<string, string[]>;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface CurrentAgent {
+  id: number;
+  fullName: string;
+  email: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  expiresAtUtc: string;
+  agent: CurrentAgent;
 }

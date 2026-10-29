@@ -76,6 +76,18 @@ a {
   font-weight: 600;
 }
 
+.app__user {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.login {
+  max-width: 400px;
+  margin: 64px auto;
+}
+
 .app__main {
   max-width: 1200px;
   margin: 0 auto;
