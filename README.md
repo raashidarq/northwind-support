@@ -15,7 +15,7 @@ each task: [APPROACH.md](APPROACH.md).
 | Task | Status |
 | --- | --- |
 | 1. Defect fix + server-side filtering | Done |
-| 2. Ticket escalation & assignment | Done (2.5 stretch report not attempted) |
+| 2. Ticket escalation & assignment | Done, including the 2.5 SLA summary report |
 | 3. Login and authentication | Done |
 | 4. Dockerise the API | Done |
 
@@ -195,6 +195,38 @@ Every active seeded agent signs in with the password **`Northwind-Dev-2026`**
 Yuki Tanaka (`yuki.tanaka@northwind-support.example`) is inactive, so that sign-in is refused.
 The seeder also sets these passwords on a database seeded before login existed.
 
+## SLA summary report (2.5)
+
+`GET /api/reports/sla-summary?groupBy=agent|priority&from=&to=` (signed-in agents only) returns one
+row per agent or per priority for tickets created in [from, to). Both dates are optional and are
+read as UTC.
+- **Each row:** total tickets; counts of breached, at risk, within SLA and met; breach rate; average
+  resolution hours.
+- **Counts:** the four SLA counts use exactly the same rules as the list's SLA status and filter
+  (the cut-offs are shared code), and leave out tickets with no due date, so they can add up to less
+  than the total.
+- **Breach rate:** breached ÷ tickets that have a due date (tickets with no SLA cannot breach); null,
+  not 0, when a group has none, because 0% would suggest "no breaches" rather than "nothing to
+  measure".
+- **Average resolution hours:** created → resolved, over resolved tickets only; null when none are.
+- **Groups:** grouping by agent keys on agent id and name, with unassigned tickets as "Unassigned"
+  (listed last). Grouping by priority lists Critical first.
+- **400** for a `groupBy` other than agent or priority, or a `to` that is not after `from`.
+
+**One query.** Each ticket's SLA status is a SQL `CASE`. Each group is then counted with
+conditional `COUNT(CASE ...)`, plus `AVG(DATEDIFF(second, ...))`, all under one `GROUP BY`. No
+tickets are loaded into memory; only the breach rate and rounding are done in C#, on the few group
+rows.
+
+**Tests** (in-memory SQLite): counts per SLA state, the Unassigned group, both edges of the date
+range, the average, validation, and a check that exactly one SQL command containing `GROUP BY` is
+executed. SQLite has no `DATEDIFF`, so the test project maps it to a `julianday` difference
+(`SqliteDateDiffTranslatorProvider`, test code only) and the average is tested too.
+
+**Checked on SQL Server:** grouped by priority and then by agent, the counts summed to 9 breached,
+5 at risk, 14 within and 12 met, exactly what the list's SLA filter returned on the same database,
+and to 40 tickets in total.
+
 ## Docker
 
 **Build and run** (from the repository root; needs only Docker):
@@ -282,7 +314,7 @@ Development:
 ## Testing
 
 - Run everything: `npm test` (backend xUnit, then web Vitest). No database needed.
-- Baseline before any change: 30 backend + 2 web tests, all passing. Now 103 backend + 23 web.
+- Baseline before any change: 30 backend + 2 web tests, all passing. Now 113 backend unit + 4 architecture + 23 web.
 - **DEFECT-117** (`apps/web/src/features/tickets/hooks/useTicketList.test.ts`): 8 tests on the hook
   with the API mocked and timers faked, asserting which request is sent and when.
 - **Filtering** (`apps/api/tests/SupportDesk.UnitTests/Infrastructure/Queries/TicketQueriesTests.cs`):
@@ -335,6 +367,10 @@ Development:
 - **Task 3:** the AI's first unknown-email path verified the password against a made-up hash
   string, which Identity's hasher would have rejected with an exception. It was changed to hash the
   password instead, which costs the same time.
+- **Parallel work:** while the Docker image built, a separate Claude agent wrote the 2.5 report in
+  its own git worktree, so it could not disturb the build. I reviewed its diff, re-ran its tests,
+  ran it against SQL Server (it had only been tested on SQLite) and checked its totals against the
+  SLA filter before copying it in.
 - **A decision I made:** how AtRisk knows the window length (see Design decisions). The AI laid out
   three options; I chose deriving it from priority and tier.
 - **How generated code was verified:** tests run on the old code (failing) and on the change (passing),
@@ -419,6 +455,7 @@ Both pass on a clean checkout and neither needs a database.
 | `GET /api/auth/me` | The signed-in agent |
 | `POST /api/tickets/{id}/escalate` | Escalate one level: `{ "reason" }`; who escalated comes from the token |
 | `GET /api/tickets/{id}/escalations` | Escalation history, newest first |
+| `GET /api/reports/sla-summary` | SLA counts per agent or priority: `groupBy=agent|priority`, optional `from`, `to` |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
 

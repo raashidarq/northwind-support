@@ -109,3 +109,15 @@ The brief says the rules are simple and the challenge is where they go, so I dec
    and compose starts the API only after SQL Server's own health check passes, so migrations never
    run against a database that isn't ready.
 5. **Verified every point** in the brief's list on a wiped volume (see the README for the figures).
+
+## Task 2.5: SLA summary report
+
+Done last, in parallel with the Docker build, by a separate agent in its own worktree; I reviewed
+and verified it before bringing it in.
+- One GROUP BY query: each ticket's SLA status is a SQL CASE built from the same cut-offs as the SLA
+  filter (now shared in `AtRiskCutOffsAt`), counted per group with `COUNT(CASE ...)`. Only the breach
+  rate and rounding happen in C#, on the group rows.
+- Breach rate is breached over tickets that have a due date, since tickets with no SLA can't breach;
+  null rather than 0 when a group has none.
+- Checked against SQL Server: the report's counts add up to exactly what the list's SLA filter
+  returns, so the report, the filter and the displayed status all agree.
