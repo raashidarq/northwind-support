@@ -30,4 +30,19 @@ public sealed class AgentQueries(SupportDbContext db) : IAgentQueries
                  select new CategorySummaryDto(category.Id, category.Name))
                 .ToList()))
             .ToListAsync(ct);
+
+    public async Task<IReadOnlyList<AgentCandidate>> GetCandidatesAsync(CancellationToken ct) =>
+        await db.Set<Agent>()
+            .AsNoTracking()
+            .Select(a => new AgentCandidate(
+                a.Id,
+                a.FullName,
+                a.IsActive,
+                a.MaxOpenTickets,
+                a.Specializations.Select(s => s.CategoryId).ToList(),
+                db.Set<Ticket>().Count(t =>
+                    t.AssignedAgentId == a.Id &&
+                    t.Status != TicketStatus.Resolved &&
+                    t.Status != TicketStatus.Closed)))
+            .ToListAsync(ct);
 }

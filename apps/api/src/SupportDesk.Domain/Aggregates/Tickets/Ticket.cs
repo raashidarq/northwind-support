@@ -111,4 +111,14 @@ public sealed class Ticket : AggregateRoot
         AssignedAgentId = agentId;
         UpdatedAtUtc = nowUtc;
     }
+
+    /// <summary>
+    /// Starts an SLA window: the ticket is due <paramref name="window"/> after
+    /// <paramref name="nowUtc"/>. The window itself comes from <see cref="SlaPolicy"/>.
+    /// </summary>
+    public void StartSlaWindow(TimeSpan window, DateTime nowUtc)
+    {
+        DueAtUtc = nowUtc + window;
+        UpdatedAtUtc = nowUtc;
+    }
 }

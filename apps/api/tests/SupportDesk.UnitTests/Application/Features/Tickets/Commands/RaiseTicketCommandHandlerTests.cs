@@ -1,5 +1,8 @@
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Application.Exceptions;
+using SupportDesk.Domain.Aggregates.Agents;
+using SupportDesk.Domain.Aggregates.Categories;
+using SupportDesk.Domain.Aggregates.Customers;
 using SupportDesk.Domain.Aggregates.Tickets;
 using SupportDesk.UnitTests.TestDoubles;
 
@@ -43,8 +46,8 @@ public class RaiseTicketCommandHandlerTests
     {
         var context = new TicketCommandTestContext();
         context.Customers
-            .Setup(c => c.ExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
+            .Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Customer?)null);
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(
             () => context.RaiseTicket.HandleAsync(Request(), CancellationToken.None));
@@ -52,4 +55,62 @@ public class RaiseTicketCommandHandlerTests
         Assert.Contains("Customer", exception.Message);
         context.VerifySaved(Times.Never());
     }
+
+    // Triage (BR-1 to BR-5): the rules are tested on their own in the domain tests; these check
+    // that creating a ticket applies them and reports why.
+
+    [Theory]
+    [InlineData(CustomerTier.Standard, 8)]
+    [InlineData(CustomerTier.Premium, 4)]
+    public async Task HandleAsync_SetsTheDueDateFromTheSlaWindow(CustomerTier tier, int hours)
+    {
+        var context = new TicketCommandTestContext();
+        context.ExistingCustomer(tier);
+
+        var result = await context.RaiseTicket.HandleAsync(Request(TicketPriority.High), CancellationToken.None);
+
+        Assert.Equal(FixedClock.DefaultNow.AddHours(hours), context.AddedTicket?.DueAtUtc);
+        Assert.StartsWith($"{hours} h", result.Triage?.SlaWindow);
+    }
+
+    [Fact]
+    public async Task HandleAsync_InACategoryThatForcesCritical_IsCritical()
+    {
+        var context = new TicketCommandTestContext();
+        context.ExistingCategory(new Category("Outage", requiresSpecialist: false, forcesCriticalPriority: true));
+
+        var result = await context.RaiseTicket.HandleAsync(Request(TicketPriority.Low), CancellationToken.None);
+
+        Assert.Equal(TicketPriority.Critical, context.AddedTicket?.Priority);
+        Assert.Equal(FixedClock.DefaultNow.AddHours(4), context.AddedTicket?.DueAtUtc);
+        Assert.Contains("Outage", result.Triage?.Priority);
+    }
+
+    [Fact]
+    public async Task HandleAsync_AssignsTheAgentWithTheFewestOpenTickets()
+    {
+        var context = new TicketCommandTestContext();
+        context.AgentCandidates(Candidate(4, open: 3), Candidate(6, open: 1));
+
+        var result = await context.RaiseTicket.HandleAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(6, context.AddedTicket?.AssignedAgentId);
+        Assert.Contains("Agent 6", result.Triage?.Assignment);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenNobodyIsEligible_StillCreatesTheTicketUnassigned()
+    {
+        var context = new TicketCommandTestContext();
+        context.AgentCandidates(Candidate(4, open: 10, max: 10));
+
+        var result = await context.RaiseTicket.HandleAsync(Request(), CancellationToken.None);
+
+        Assert.Null(context.AddedTicket?.AssignedAgentId);
+        Assert.StartsWith("Left unassigned", result.Triage?.Assignment);
+        context.VerifySaved(Times.Once());
+    }
+
+    private static AgentCandidate Candidate(int id, int open, int max = 10) =>
+        new(id, $"Agent {id}", IsActive: true, max, [], open);
 }

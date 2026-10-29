@@ -6,6 +6,7 @@ using SupportDesk.Application.Features.Tickets.Commands.ChangeTicketStatus;
 using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
 using SupportDesk.Domain.Aggregates.Agents;
+using SupportDesk.Domain.Aggregates.Categories;
 using SupportDesk.Domain.Aggregates.Customers;
 using SupportDesk.Domain.Aggregates.Tickets;
 using SupportDesk.Domain.Repositories;
@@ -21,11 +22,11 @@ internal sealed class TicketCommandTestContext
 {
     public TicketCommandTestContext()
     {
-        Customers.Setup(c => c.ExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+        ExistingCustomer(CustomerTier.Standard);
 
-        Categories.Setup(c => c.ExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+        ExistingCategory(new Category("General", requiresSpecialist: false, forcesCriticalPriority: false));
+
+        AgentCandidates();
 
         Tickets.Setup(t => t.NextReferenceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync("TCK-0041");
@@ -47,8 +48,8 @@ internal sealed class TicketCommandTestContext
         var getTicket = new GetTicketQueryHandler(TicketQueries.Object);
 
         RaiseTicket = new RaiseTicketCommandHandler(
-            Tickets.Object, Customers.Object, Categories.Object, UnitOfWork.Object, Clock, getTicket,
-            NullLogger<RaiseTicketCommandHandler>.Instance);
+            Tickets.Object, Customers.Object, Categories.Object, AgentQueries.Object, UnitOfWork.Object, Clock,
+            TestSla.Policy(), getTicket, NullLogger<RaiseTicketCommandHandler>.Instance);
 
         ChangeTicketStatus = new ChangeTicketStatusCommandHandler(Tickets.Object, UnitOfWork.Object, Clock, getTicket);
 
@@ -58,6 +59,8 @@ internal sealed class TicketCommandTestContext
     }
 
     public Mock<ITicketRepository> Tickets { get; } = new();
+
+    public Mock<IAgentQueries> AgentQueries { get; } = new();
 
     public Mock<ICustomerRepository> Customers { get; } = new();
 
@@ -100,6 +103,19 @@ internal sealed class TicketCommandTestContext
 
         Agents.Setup(a => a.GetByIdAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(agent);
     }
+
+    public void ExistingCustomer(CustomerTier tier) =>
+        Customers.Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Customer("Contoso Ltd", "support@contoso.example", null, tier, Clock.UtcNow));
+
+    public void ExistingCategory(Category category) =>
+        Categories.Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(category);
+
+    /// <summary>The agents the assignment rule chooses from; none unless a test adds some.</summary>
+    public void AgentCandidates(params AgentCandidate[] candidates) =>
+        AgentQueries.Setup(q => q.GetCandidatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(candidates);
 
     public void VerifySaved(Times times) =>
         UnitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), times);
