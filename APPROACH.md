@@ -42,3 +42,33 @@ How I worked through each task and why. The decisions themselves are summarised 
    priority, both the count and the page query carried a `WHERE` on `Priority`.
 5. **Looked ahead.** Task 2's SLA filter can't be added the same way, because the SLA status is
    calculated in C#. I noted that it will need to be expressed as date conditions instead.
+
+## Task 2: Ticket escalation & assignment
+
+The brief says the rules are simple and the challenge is where they go, so I decided that first.
+
+1. **Read what was there.** `SlaStatus` already had an `AtRisk` value that `SlaEvaluator` never
+   returned; categories already carried `ForcesCriticalPriority` and `RequiresSpecialist`; an `Sla`
+   config section existed but nothing read it; the architecture tests forbid the domain from
+   depending on anything. That pointed to: rules as plain domain classes, numbers from config.
+2. **Rules first, alone (2A).** `PriorityRule`, `SlaPolicy`, `AgentSelector` and AtRisk in
+   `SlaEvaluator`, each with unit tests and no database. One real decision came up: AtRisk needs the
+   window's length, and after an escalation `Due - Created` is wrong. I chose to derive it from the
+   current priority and tier (see README), which needs no new column.
+3. **Triage on create (2B).** The handler only gathers inputs (customer tier, category flags, agents
+   with open counts from one query) and calls the rules. I checked it against the real database:
+   a Low Outage ticket for a Premium customer became Critical, due in 2 h, assigned to the Outage
+   specialist with the fewest open tickets.
+4. **Escalation (2C).** Put on the `Ticket` aggregate so it can't be bypassed, like the existing
+   `ChangeStatus`. History is part of the ticket and can't be changed. While writing
+   "keep the agent if still eligible" I noticed an agent at their limit would be "ineligible" for a
+   ticket they already hold, so the check leaves that ticket out of their count.
+   Every response (200 / 400 / 404 / 409) was called against SQL Server.
+5. **SLA filter (2D).** The evaluator can't run in SQL, so I rewrote each status as date
+   comparisons, with the 8 at-risk cut-offs computed up front and chosen per row by a `CASE`. The
+   tests check every result against the evaluator itself, and I broke a boundary on purpose to see
+   them fail.
+6. **Frontend (2E).** Reused the existing `SlaCell` (it was already on both pages) and made its labels
+   cover every state. The SLA filter needed no change to the list hook, because the DEFECT-117 fix
+   already sends a request for any filter field. The escalation form checks the same limits as the
+   server before sending, and handles a 409 anyway.
