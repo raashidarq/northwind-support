@@ -72,3 +72,24 @@ The brief says the rules are simple and the challenge is where they go, so I dec
    cover every state. The SLA filter needed no change to the list hook, because the DEFECT-117 fix
    already sends a request for any filter field. The escalation form checks the same limits as the
    server before sending, and handles a 409 anyway.
+
+## Task 3: Login and authentication
+
+1. **Decide where credentials live.** Agents already had a unique email, and only agents sign in,
+   so a password hash on `Agent` was enough; a separate Users table or full Identity would bring in
+   roles and lockout, which the brief puts out of scope.
+2. **Keep the layers clean.** The login rules (the same answer for every failure, inactive agents
+   refused) are in an Application handler that only knows two interfaces: hash a password, issue a
+   token. Identity's hasher and the JWT code sit in Presentation, which already depends on ASP.NET
+   Core, so no rule in the architecture tests had to bend.
+3. **Protect by default.** Rather than putting `[Authorize]` on each controller, a fallback policy
+   requires a signed-in agent everywhere and login opts out. Then a new endpoint cannot be forgotten.
+4. **Think like an attacker on login.** Identical 401s for wrong email and wrong password, and an
+   unknown email still costs a hash, so neither the message nor the timing reveals who has an
+   account. The signing key is only read from configuration and the API refuses a short one.
+5. **Check it live.** No token, a tampered token, wrong email, wrong password and an inactive agent
+   all gave 401; `escalatedBy` came from the token.
+6. **Frontend.** One place adds the token (the existing `request` function) and one place reacts to
+   401 (it clears the session; the route guard redirects). The login page returns the agent to where
+   they were going, but only to a path inside the app. Checked in the browser, including a tampered
+   token.

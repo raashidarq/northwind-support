@@ -16,7 +16,7 @@ each task: [APPROACH.md](APPROACH.md).
 | --- | --- |
 | 1. Defect fix + server-side filtering | Done |
 | 2. Ticket escalation & assignment | Done (2.5 stretch report not attempted) |
-| 3. Login and authentication | Not started |
+| 3. Login and authentication | Done |
 | 4. Dockerise the API | Not started |
 
 ## What was implemented and the rules as understood
@@ -42,6 +42,11 @@ Where the brief left a gap, I decided:
 - On escalation an agent exactly at their limit **keeps** the ticket: it is already counted in their
   load, so keeping it adds nothing. They would not be picked for a *new* ticket.
 - Reasons are trimmed and measured after trimming (5-500), on the server and in the UI.
+
+- **Login (Task 3):** agents sign in with email and password; every API endpoint except login needs
+  their token; the web app has a login page, sends the token with every request, shows who is
+  signed in with a Sign out button, and returns to login on any 401. The escalation's
+  `escalatedBy` is now the signed-in agent, taken from the token.
 
 ## Design decisions
 
@@ -94,6 +99,17 @@ the filter use the same "now", so they can't disagree.
 **Triage reasons** are returned as a `triage` property on the existing ticket response, filled in
 only by create, rather than a second response type.
 
+**Task 3: credentials on `Agent`, not a separate Users table.**
+- *Chosen:* agents already had a unique `Email`, so one nullable `PasswordHash` column was enough.
+  Only agents sign in, and the brief rules out registration and roles.
+- *Rejected:* a `Users` table linked to `Agent`, or full ASP.NET Core Identity. Both add tables and
+  concepts (roles, claims, lockout) the brief says are out of scope.
+- *Secure by default:* a fallback authorization policy makes every endpoint require a signed-in
+  agent; only login is `[AllowAnonymous]`. A new endpoint is protected without anyone remembering.
+- *Layers:* the Application layer only sees `IPasswordHasher` and `ITokenIssuer`; the
+  implementations (Identity's hasher, JWT) live in Presentation, which already references ASP.NET
+  Core, so the architecture tests still pass and no package was added for hashing.
+
 ## The defect (DEFECT-117)
 
 **Root cause.** The effect in `useTicketList` that loads tickets only re-ran when `search`, `page` or
@@ -137,6 +153,48 @@ decisions. Checked the same way: across the five SLA filters the 40 seeded ticke
 14 + 5 + 9 + 12 + 0 = 40, each once, and the log shows the `WHERE ... CASE ...` on both the count
 and the page.
 
+## Authentication
+
+- **Credential storage:** `Agents.PasswordHash` (nullable; an agent without one cannot sign in).
+  Plain passwords are never stored or logged.
+- **Hashing:** ASP.NET Core Identity's `PasswordHasher`: PBKDF2 with HMAC-SHA512, a random salt
+  per password and many iterations, and the settings are stored inside the hash so they can be
+  raised later without breaking old hashes.
+- **Login:** `POST /api/auth/login` with `{ email, password }`. Unknown email, wrong password and
+  inactive agent all return the same 401 "Email or password is incorrect.". An unknown email still
+  costs one hash, so the response time does not reveal which emails exist.
+  `GET /api/auth/me` returns the signed-in agent, re-read so a deactivated agent is refused.
+- **Token issue:** a JWT signed with HMAC-SHA256, carrying the agent's id (`sub`), name and email,
+  checked for issuer, audience, signature and expiry. The signing key comes only from configuration:
+  a dev-only key in `appsettings.Development.json` (like the existing dev database password), and
+  `Jwt__Key` everywhere else (see `.env.example`). The API will not start without a key of at
+  least 32 characters.
+- **Token storage (web):** `sessionStorage`, so it survives a reload but not closing the tab. The
+  shared `request` function adds `Authorization: Bearer ...` to every call and, on any 401, clears
+  the session; the route guard then sends the agent to `/login?returnTo=...` and back after sign-in.
+- **Lifetime:** 60 minutes (`Jwt:LifetimeMinutes`). No refresh token (out of scope), so the agent
+  signs in again after an hour.
+- **For production I would change:** a real secret in a secret store (Key Vault or similar),
+  rotated; an `HttpOnly`, `Secure`, `SameSite` cookie instead of `sessionStorage`, so a script
+  injected into the page cannot read the token; HTTPS only; rate limiting and lockout on login;
+  shorter tokens with refresh tokens; a way to revoke tokens (e.g. on deactivation).
+
+## Development login credentials
+
+Every active seeded agent signs in with the password **`Northwind-Dev-2026`**
+(`DevSeed:AgentPassword` in `appsettings.Development.json`; development seed data only):
+
+| Agent | Email |
+| --- | --- |
+| Alex Turner | `alex.turner@northwind-support.example` |
+| Ben Osei | `ben.osei@northwind-support.example` |
+| Priya Nair | `priya.nair@northwind-support.example` |
+| Sara Lindqvist | `sara.lindqvist@northwind-support.example` |
+| Marcus Doyle | `marcus.doyle@northwind-support.example` |
+
+Yuki Tanaka (`yuki.tanaka@northwind-support.example`) is inactive, so that sign-in is refused.
+The seeder also sets these passwords on a database seeded before login existed.
+
 ## Database
 
 Added by the migration `AddTicketEscalations` (committed in `Data/Migrations`), applied on start-up in
@@ -150,13 +208,16 @@ Development:
 - **Index `IX_TicketEscalations_TicketId_EscalatedAtUtc`**: serves the history endpoint exactly (one
   ticket's rows, newest first) without a sort step, and also covers the foreign key. EF Core adds
   its default indexes on the two agent foreign keys.
+- **`Agents.PasswordHash`** (`nvarchar(256)`, nullable): added by the migration
+  `AddAgentPasswordHash` for Task 3. No index: agents are looked up by `Email`, which already has a
+  unique index.
 - No other tables changed. Escalation rows are never updated: the entity has private setters and no
   methods that change it.
 
 ## Testing
 
 - Run everything: `npm test` (backend xUnit, then web Vitest). No database needed.
-- Baseline before any change: 30 backend + 2 web tests, all passing. Now 101 backend + 18 web.
+- Baseline before any change: 30 backend + 2 web tests, all passing. Now 103 backend + 23 web.
 - **DEFECT-117** (`apps/web/src/features/tickets/hooks/useTicketList.test.ts`): 8 tests on the hook
   with the API mocked and timers faked, asserting which request is sent and when.
 - **Filtering** (`apps/api/tests/SupportDesk.UnitTests/Infrastructure/Queries/TicketQueriesTests.cs`):
@@ -177,10 +238,17 @@ Development:
 - **Web:** short reason blocks submit and never calls the API; a 409 is shown and the ticket is
   unchanged; the escalate button is disabled for a Critical ticket; every SLA state has its own text
   and colour.
+- **Login (backend):** the right password issues a token; wrong email and wrong password fail with
+  the identical message; an unknown email still costs a hash; an inactive agent gets no token.
+- **Login (web):** the token is sent with every request; a 401 clears the session; the login form
+  checks its fields before calling the API; a wrong password shows the server's message; a
+  successful sign-in returns to the page the agent wanted.
 - Each endpoint was also called against SQL Server (200 / 400 / 404 / 409, history, triage).
 - *Not tested:* search case-insensitivity. SQLite compares case-sensitively and SQL Server, by
   default, does not, so a test here would only be testing SQLite. Two tickets created at the same
-  moment racing for the last slot of an agent's limit (see Known limitations).
+  moment racing for the last slot of an agent's limit (see Known limitations). Login has no automated
+  end-to-end test of "every endpoint is protected"; I checked it with curl instead: no token, a
+  tampered token, and each failed-login case all return 401.
 
 ## AI usage
 
@@ -199,6 +267,9 @@ Development:
   test that escalated a High ticket twice: the rule correctly refused the second step (already
   Critical), so the test was wrong, not the code. It also first bound the SLA config in the
   Infrastructure layer, which lacks the binder package; moved to `Program.cs` rather than add one.
+- **Task 3:** the AI's first unknown-email path verified the password against a made-up hash
+  string, which Identity's hasher would have rejected with an exception. It was changed to hash the
+  password instead, which costs the same time.
 - **A decision I made:** how AtRisk knows the window length (see Design decisions). The AI laid out
   three options; I chose deriving it from priority and tier.
 - **How generated code was verified:** tests run on the old code (failing) and on the change (passing),
@@ -216,7 +287,9 @@ Development:
 - Changing the `Sla` config moves existing tickets' at-risk point, because AtRisk is derived from
   the current config (see Design decisions).
 - The `Sla` section is only in `appsettings.Development.json`; the API refuses to start without it.
-- `escalatedBy` is free text until login (Task 3) can supply the agent.
+- Swagger has no "Authorize" button, so calls from the Swagger page get 401. Use the web app, or
+  curl with `-H "Authorization: Bearer <token>"` (the token comes from `POST /api/auth/login`).
+- No refresh tokens, lockout or rate limiting on login (see Authentication for production).
 - The API build warns that `System.Security.Cryptography.Pkcs` 9.0.11 has known vulnerabilities.
   Pre-existing dependency; out of scope here.
 - Out of scope per the brief: registration, password reset, roles, OAuth/SSO, refresh tokens, MFA,
@@ -246,7 +319,8 @@ npm run web                   # terminal 2: React dev server
 | API | https://localhost:7043 (also http://localhost:5043) |
 | Swagger | https://localhost:7043/swagger |
 
-In Development the API applies migrations and seeds demo data on startup. **Never commit real
+In Development the API applies migrations and seeds demo data on startup. Sign in with any agent
+from "Development login credentials" above. **Never commit real
 credentials.**
 
 **Visual Studio 2026:** run `npm run db:up`, open `SupportDesk.sln`, set
@@ -277,12 +351,14 @@ Both pass on a clean checkout and neither needs a database.
 | `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `slaStatus`, `sortBy`, `sortDirection`. All applied in the database. |
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create a ticket; triaged automatically, with a `triage` object of reasons |
-| `POST /api/tickets/{id}/escalate` | Escalate one level: `{ "reason", "escalatedBy" }` |
+| `POST /api/auth/login` | Sign in: `{ "email", "password" }` → token (the only endpoint open without a token) |
+| `GET /api/auth/me` | The signed-in agent |
+| `POST /api/tickets/{id}/escalate` | Escalate one level: `{ "reason" }`; who escalated comes from the token |
 | `GET /api/tickets/{id}/escalations` | Escalation history, newest first |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
 
-Errors are `ProblemDetails`: `400` validation, `404` not found, `409` conflict or business rule.
+Errors are `ProblemDetails`: `400` validation, `401` not signed in or failed login, `404` not found, `409` conflict or business rule.
 
 **Seed data:** 5 categories, 6 customers (3 Premium), 6 agents (one inactive, one at their limit)
 and 40 tickets across every status, priority and SLA state.
