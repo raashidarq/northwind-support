@@ -17,7 +17,7 @@ public sealed record UpdateTicketStatusRequest(TicketStatus Status);
 public sealed record AssignTicketRequest(int? AgentId);
 
 /// <summary>
-/// Body of POST /api/tickets/{id}/escalate. <c>EscalatedBy</c> names who escalated it until
-/// login (Task 3) can say so instead.
+/// Body of POST /api/tickets/{id}/escalate. Who escalated it is the signed-in agent, taken from
+/// the access token, never from the body.
 /// </summary>
-public sealed record EscalateTicketRequest(string Reason, string EscalatedBy);
+public sealed record EscalateTicketRequest(string Reason);

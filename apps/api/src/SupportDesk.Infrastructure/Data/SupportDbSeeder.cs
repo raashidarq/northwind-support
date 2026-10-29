@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Domain.Aggregates.Agents;
@@ -17,7 +18,12 @@ namespace SupportDesk.Infrastructure.Data;
 /// Every aggregate is built through its own behaviour. The two historical values no behaviour
 /// produces - a ticket's last update and its due date - are set through EF Core directly.
 /// </remarks>
-public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<SupportDbSeeder> logger)
+public sealed class SupportDbSeeder(
+    SupportDbContext db,
+    IClock clock,
+    IPasswordHasher passwordHasher,
+    IConfiguration configuration,
+    ILogger<SupportDbSeeder> logger)
 {
     /// <summary>Seeds the database, unless it already has tickets in it.</summary>
     public async Task SeedAsync(CancellationToken ct = default)
@@ -25,6 +31,7 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
         if (await db.Set<Ticket>().AnyAsync(ct))
         {
             logger.LogInformation("Seed data already present; skipping.");
+            await SetMissingPasswordsAsync(ct);
             return;
         }
 
@@ -48,6 +55,32 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
         logger.LogInformation(
             "Seeded {Categories} categories, {Customers} customers, {Agents} agents and {Tickets} tickets.",
             categories.Count, customers.Count, agents.Count, await db.Set<Ticket>().CountAsync(ct));
+
+        await SetMissingPasswordsAsync(ct);
+    }
+
+    /// <summary>
+    /// Gives every agent who has no password the development password (<c>DevSeed:AgentPassword</c>),
+    /// hashed with its own salt. Also runs on a database seeded before sign-in existed.
+    /// </summary>
+    private async Task SetMissingPasswordsAsync(CancellationToken ct)
+    {
+        var password = configuration["DevSeed:AgentPassword"];
+
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            logger.LogWarning("DevSeed:AgentPassword is not set, so seeded agents cannot sign in.");
+            return;
+        }
+
+        var agents = await db.Set<Agent>().Where(a => a.PasswordHash == null).ToListAsync(ct);
+
+        foreach (var agent in agents)
+        {
+            agent.SetPasswordHash(passwordHasher.Hash(password));
+        }
+
+        await db.SaveChangesAsync(ct);
     }
 
     private static List<Category> SeedCategories() =>

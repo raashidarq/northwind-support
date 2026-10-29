@@ -12,17 +12,11 @@ public class EscalateTicketRequestValidatorTests
     [InlineData("   Lost   ", false)]
     [InlineData("Late!", true)]
     public void Reason_MustBeAtLeastFiveCharactersOnceTrimmed(string reason, bool valid) =>
-        Assert.Equal(valid, _validator.Validate(new EscalateTicketRequest(reason, "Team lead")).IsValid);
+        Assert.Equal(valid, _validator.Validate(new EscalateTicketRequest(reason)).IsValid);
 
     [Theory]
     [InlineData(500, true)]
     [InlineData(501, false)]
     public void Reason_MustBeAtMostFiveHundredCharacters(int length, bool valid) =>
-        Assert.Equal(valid, _validator.Validate(new EscalateTicketRequest(new string('a', length), "Team lead")).IsValid);
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void EscalatedBy_IsRequired(string escalatedBy) =>
-        Assert.False(_validator.Validate(new EscalateTicketRequest("Customer is losing sales", escalatedBy)).IsValid);
+        Assert.Equal(valid, _validator.Validate(new EscalateTicketRequest(new string('a', length))).IsValid);
 }

@@ -11,7 +11,6 @@ public sealed class EscalateTicketRequestValidator : AbstractValidator<EscalateT
 {
     public const int ReasonMinLength = 5;
     public const int ReasonMaxLength = 500;
-    public const int EscalatedByMaxLength = 100;
 
     public EscalateTicketRequestValidator()
     {
@@ -19,10 +18,5 @@ public sealed class EscalateTicketRequestValidator : AbstractValidator<EscalateT
             .NotEmpty()
             .Must(r => r.Trim().Length is >= ReasonMinLength and <= ReasonMaxLength)
             .WithMessage($"Reason must be between {ReasonMinLength} and {ReasonMaxLength} characters.");
-
-        RuleFor(x => x.EscalatedBy)
-            .NotEmpty()
-            .Must(by => by.Trim().Length <= EscalatedByMaxLength)
-            .WithMessage($"Escalated by must be {EscalatedByMaxLength} characters or fewer.");
     }
 }
