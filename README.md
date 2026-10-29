@@ -17,7 +17,7 @@ each task: [APPROACH.md](APPROACH.md).
 | 1. Defect fix + server-side filtering | Done |
 | 2. Ticket escalation & assignment | Done (2.5 stretch report not attempted) |
 | 3. Login and authentication | Done |
-| 4. Dockerise the API | Not started |
+| 4. Dockerise the API | Done |
 
 ## What was implemented and the rules as understood
 
@@ -195,6 +195,71 @@ Every active seeded agent signs in with the password **`Northwind-Dev-2026`**
 Yuki Tanaka (`yuki.tanaka@northwind-support.example`) is inactive, so that sign-in is refused.
 The seeder also sets these passwords on a database seeded before login existed.
 
+## Docker
+
+**Build and run** (from the repository root; needs only Docker):
+
+```bash
+docker compose up --build          # SQL Server, then the API once SQL Server is healthy
+```
+
+- API: http://localhost:5080 (Swagger at /swagger in Development), health at http://localhost:5080/health.
+- On an empty volume the API applies the migrations and seeds the demo data, so the dev logins work.
+- To use the web app against the container:
+  `VITE_API_PROXY_TARGET=http://localhost:5080 npm run web`
+  (PowerShell: `$env:VITE_API_PROXY_TARGET="http://localhost:5080"; npm run web`).
+- `npm run db:up` still starts SQL Server alone, for running the API with `npm run api`.
+
+**The image** (`apps/api/Dockerfile`, built from the repository root):
+- Two stages: the .NET 10 SDK builds and publishes; only the published output is copied into the
+  much smaller ASP.NET runtime image. No SDK and no source code in the final image.
+- Restore is its own layer: `global.json`, `Directory.Build.props`, `Directory.Packages.props`
+  and the four `.csproj` files are copied and restored before any source, so changing a `.cs` file
+  reuses the cached restore.
+- Runs as the image's built-in non-root `app` user, on plain HTTP port 8080. No certificates.
+- `.dockerignore` keeps out `bin/`, `obj/`, `node_modules/`, `.git/`, `.env`, the web app, the
+  tests, and `appsettings.Development.json` (it holds the dev connection string and dev JWT key).
+
+**Environment variables** (set in `docker-compose.yml`; override in `.env`, see `.env.example`):
+
+| Variable | Purpose |
+| --- | --- |
+| `ASPNETCORE_ENVIRONMENT` (`API_ENVIRONMENT`) | `Development` migrates and seeds on start-up and enables Swagger |
+| `ConnectionStrings__Default` | SQL Server, reached by its compose service name `sqlserver` |
+| `Jwt__Key` (`JWT_KEY`) | Token signing key, at least 32 characters |
+| `DevSeed__AgentPassword` (`DEV_AGENT_PASSWORD`) | Password given to the seeded agents |
+
+The compose file has throwaway local defaults for these, in the same way it already did for the SA
+password, so `docker compose up --build` works with no `.env`. Nothing is baked into the image.
+The SLA numbers moved from `appsettings.Development.json` to `appsettings.json`: they are
+business settings, not secrets, and every environment (including this container) needs them.
+
+**`GET /health`** checks that the database can be reached: 200 `Healthy` or 503 `Unhealthy`. It is
+mapped once in `Program.cs` and is open without a token.
+
+**Image size:** the runtime image is **457 MB**; the SDK build stage it is made from is **2.42 GB** (SDK, restored packages and source), so the image that ships is about a fifth of the size.
+
+**Migrations in a real deployment.** Migrating on start-up is a development convenience. In
+production I would not let the app change its own schema: several instances starting at once would
+race to migrate, the app would need permission to alter tables, and a failed migration would surface
+as a crashing app. Instead I would generate an idempotent SQL script
+(`dotnet ef migrations script --idempotent`) or a migration bundle (`dotnet ef migrations bundle`),
+review it, and run it as a separate step in the release pipeline before the new version starts,
+with a database user that is allowed to change the schema while the app's own user is not.
+
+**How each check was done** (29 October, Docker Desktop 29.8):
+- `docker compose down -v && docker compose up --build`: on the empty volume the API migrated and
+  seeded; `/health` returned 200 `Healthy` without a token, `/api/tickets` returned 401 without a
+  token and `totalCount: 40` after signing in as a seeded agent.
+- Added a comment to one `.cs` file and rebuilt with `--progress=plain`: the `dotnet restore` step
+  was `CACHED`; only copying the source and `dotnet publish` ran again.
+- `docker images`: 457 MB for the runtime image vs 2.42 GB for the build stage
+  (`docker build --target build`).
+- `docker compose exec api whoami` printed `app`. `ls /app` in the container shows only
+  `appsettings.json` (no Development settings) and no source files.
+- `VITE_API_PROXY_TARGET=http://localhost:5080` with the Vite dev server: signing in through the
+  proxy reached the container (200).
+
 ## Database
 
 Added by the migration `AddTicketEscalations` (committed in `Data/Migrations`), applied on start-up in
@@ -286,7 +351,6 @@ Development:
   a serialisable transaction around assignment.
 - Changing the `Sla` config moves existing tickets' at-risk point, because AtRisk is derived from
   the current config (see Design decisions).
-- The `Sla` section is only in `appsettings.Development.json`; the API refuses to start without it.
 - Swagger has no "Authorize" button, so calls from the Swagger page get 401. Use the web app, or
   curl with `-H "Authorization: Bearer <token>"` (the token comes from `POST /api/auth/login`).
 - No refresh tokens, lockout or rate limiting on login (see Authentication for production).

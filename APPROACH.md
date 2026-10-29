@@ -93,3 +93,19 @@ The brief says the rules are simple and the challenge is where they go, so I dec
    401 (it clears the session; the route guard redirects). The login page returns the agent to where
    they were going, but only to a path inside the app. Checked in the browser, including a tampered
    token.
+
+## Task 4: Dockerise the API
+
+1. **Read what the image must not contain.** `appsettings.Development.json` held the dev connection
+   string and JWT key, so it is excluded by `.dockerignore`; everything secret or
+   environment-specific comes in through compose environment variables. The SLA numbers were in that
+   file too, but they are business settings every environment needs, so they moved to
+   `appsettings.json`.
+2. **Order the Dockerfile for the cache.** Copy only the files that decide the packages, restore, then
+   copy the source. Checked by changing a `.cs` file: restore stayed cached.
+3. **Smallest sensible runtime.** SDK only in the build stage; the ASP.NET runtime image runs as its
+   built-in non-root `app` user on HTTP 8080.
+4. **Health and start-up order.** `/health` checks the database (open without a token, mapped once),
+   and compose starts the API only after SQL Server's own health check passes, so migrations never
+   run against a database that isn't ready.
+5. **Verified every point** in the brief's list on a wiped volume (see the README for the figures).
