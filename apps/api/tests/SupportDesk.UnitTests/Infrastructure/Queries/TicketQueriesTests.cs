@@ -32,7 +32,7 @@ public sealed class TicketQueriesTests : IDisposable
         _connection.Open();
         _db = new SupportDbContext(new DbContextOptionsBuilder<SupportDbContext>().UseSqlite(_connection).Options);
         _db.Database.EnsureCreated();
-        _queries = new TicketQueries(_db, new FixedClock());
+        _queries = new TicketQueries(_db, new FixedClock(), TestSla.Policy());
 
         var general = new Category("General", requiresSpecialist: false, forcesCriticalPriority: false);
         var billing = new Category("Billing", requiresSpecialist: false, forcesCriticalPriority: false);

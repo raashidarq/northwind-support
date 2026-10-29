@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using SupportDesk.Application;
+using SupportDesk.Domain.Aggregates.Tickets;
 using SupportDesk.Infrastructure;
 using SupportDesk.Presentation.Extensions;
 using SupportDesk.Presentation.Filters;
@@ -29,6 +30,10 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+
+// The SLA numbers live in configuration (BR-6); without them no due date can be worked out.
+builder.Services.AddSingleton(builder.Configuration.GetSection("Sla").Get<SlaPolicy>()
+    ?? throw new InvalidOperationException("The 'Sla' configuration section is missing."));
 
 var app = builder.Build();
 
