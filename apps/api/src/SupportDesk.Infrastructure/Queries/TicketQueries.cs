@@ -1,6 +1,8 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Common;
+using SupportDesk.Application.Contracts.Reports;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Domain.Aggregates.Agents;
 using SupportDesk.Domain.Aggregates.Categories;
@@ -211,16 +213,7 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
     /// </remarks>
     private IQueryable<TicketWithLabels> ApplySlaFilter(IQueryable<TicketWithLabels> source, SlaStatus status, DateTime now)
     {
-        DateTime CutOff(TicketPriority priority, CustomerTier tier) => now + sla.AtRiskPeriodFor(priority, tier);
-
-        var criticalStandard = CutOff(TicketPriority.Critical, CustomerTier.Standard);
-        var highStandard = CutOff(TicketPriority.High, CustomerTier.Standard);
-        var mediumStandard = CutOff(TicketPriority.Medium, CustomerTier.Standard);
-        var lowStandard = CutOff(TicketPriority.Low, CustomerTier.Standard);
-        var criticalPremium = CutOff(TicketPriority.Critical, CustomerTier.Premium);
-        var highPremium = CutOff(TicketPriority.High, CustomerTier.Premium);
-        var mediumPremium = CutOff(TicketPriority.Medium, CustomerTier.Premium);
-        var lowPremium = CutOff(TicketPriority.Low, CustomerTier.Premium);
+        var c = AtRiskCutOffsAt(now);
 
         return status switch
         {
@@ -236,29 +229,119 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
             SlaStatus.AtRisk => source.Where(x =>
                 x.Ticket.ResolvedAtUtc == null && x.Ticket.DueAtUtc >= now &&
                 x.Ticket.DueAtUtc <= (x.Customer.Tier == CustomerTier.Premium
-                    ? (x.Ticket.Priority == TicketPriority.Critical ? criticalPremium
-                        : x.Ticket.Priority == TicketPriority.High ? highPremium
-                        : x.Ticket.Priority == TicketPriority.Medium ? mediumPremium
-                        : lowPremium)
-                    : (x.Ticket.Priority == TicketPriority.Critical ? criticalStandard
-                        : x.Ticket.Priority == TicketPriority.High ? highStandard
-                        : x.Ticket.Priority == TicketPriority.Medium ? mediumStandard
-                        : lowStandard))),
+                    ? (x.Ticket.Priority == TicketPriority.Critical ? c.CriticalPremium
+                        : x.Ticket.Priority == TicketPriority.High ? c.HighPremium
+                        : x.Ticket.Priority == TicketPriority.Medium ? c.MediumPremium
+                        : c.LowPremium)
+                    : (x.Ticket.Priority == TicketPriority.Critical ? c.CriticalStandard
+                        : x.Ticket.Priority == TicketPriority.High ? c.HighStandard
+                        : x.Ticket.Priority == TicketPriority.Medium ? c.MediumStandard
+                        : c.LowStandard))),
 
             SlaStatus.WithinSla => source.Where(x =>
                 x.Ticket.ResolvedAtUtc == null &&
                 x.Ticket.DueAtUtc > (x.Customer.Tier == CustomerTier.Premium
-                    ? (x.Ticket.Priority == TicketPriority.Critical ? criticalPremium
-                        : x.Ticket.Priority == TicketPriority.High ? highPremium
-                        : x.Ticket.Priority == TicketPriority.Medium ? mediumPremium
-                        : lowPremium)
-                    : (x.Ticket.Priority == TicketPriority.Critical ? criticalStandard
-                        : x.Ticket.Priority == TicketPriority.High ? highStandard
-                        : x.Ticket.Priority == TicketPriority.Medium ? mediumStandard
-                        : lowStandard))),
+                    ? (x.Ticket.Priority == TicketPriority.Critical ? c.CriticalPremium
+                        : x.Ticket.Priority == TicketPriority.High ? c.HighPremium
+                        : x.Ticket.Priority == TicketPriority.Medium ? c.MediumPremium
+                        : c.LowPremium)
+                    : (x.Ticket.Priority == TicketPriority.Critical ? c.CriticalStandard
+                        : x.Ticket.Priority == TicketPriority.High ? c.HighStandard
+                        : x.Ticket.Priority == TicketPriority.Medium ? c.MediumStandard
+                        : c.LowStandard))),
 
             _ => source
         };
+    }
+
+    /// <remarks>
+    /// One SQL query: each ticket's SLA status is worked out as a CASE (the same comparisons as
+    /// <see cref="ApplySlaFilter"/>), then the rows are grouped and counted with conditional
+    /// COUNTs. Only one row per group comes back; the breach rate and rounding are done here.
+    /// </remarks>
+    public async Task<IReadOnlyList<SlaSummaryRowDto>> GetSlaSummaryAsync(
+        SlaSummaryGrouping groupBy, DateTime? from, DateTime? to, CancellationToken ct)
+    {
+        var now = clock.UtcNow;
+        var c = AtRiskCutOffsAt(now);
+
+        var tickets = TicketsWithLabels();
+
+        if (from is { } start)
+        {
+            tickets = tickets.Where(x => x.Ticket.CreatedAtUtc >= start);
+        }
+
+        if (to is { } end)
+        {
+            tickets = tickets.Where(x => x.Ticket.CreatedAtUtc < end);
+        }
+
+        // Same order of decisions as SlaEvaluator.Evaluate.
+        var rows = tickets.Select(x => new SlaReportRow
+        {
+            AgentId = x.Ticket.AssignedAgentId,
+            AgentName = x.Agent == null ? null : x.Agent.FullName,
+            Priority = x.Ticket.Priority,
+            CreatedAtUtc = x.Ticket.CreatedAtUtc,
+            ResolvedAtUtc = x.Ticket.ResolvedAtUtc,
+            SlaStatus = x.Ticket.DueAtUtc == null ? SlaStatus.NotApplicable
+                : x.Ticket.ResolvedAtUtc != null
+                    ? (x.Ticket.ResolvedAtUtc <= x.Ticket.DueAtUtc ? SlaStatus.Met : SlaStatus.Breached)
+                : x.Ticket.DueAtUtc < now ? SlaStatus.Breached
+                : x.Ticket.DueAtUtc <= (x.Customer.Tier == CustomerTier.Premium
+                    ? (x.Ticket.Priority == TicketPriority.Critical ? c.CriticalPremium
+                        : x.Ticket.Priority == TicketPriority.High ? c.HighPremium
+                        : x.Ticket.Priority == TicketPriority.Medium ? c.MediumPremium
+                        : c.LowPremium)
+                    : (x.Ticket.Priority == TicketPriority.Critical ? c.CriticalStandard
+                        : x.Ticket.Priority == TicketPriority.High ? c.HighStandard
+                        : x.Ticket.Priority == TicketPriority.Medium ? c.MediumStandard
+                        : c.LowStandard)) ? SlaStatus.AtRisk
+                : SlaStatus.WithinSla
+        });
+
+        // Agent id as well as name, so two agents with the same name stay apart.
+        Expression<Func<SlaReportRow, SlaGroupKey>> key = groupBy == SlaSummaryGrouping.Agent
+            ? r => new SlaGroupKey { AgentId = r.AgentId, AgentName = r.AgentName }
+            : r => new SlaGroupKey { Priority = r.Priority };
+
+        var groups = await rows
+            .GroupBy(key)
+            .Select(g => new
+            {
+                g.Key,
+                Total = g.Count(),
+                Breached = g.Count(r => r.SlaStatus == SlaStatus.Breached),
+                AtRisk = g.Count(r => r.SlaStatus == SlaStatus.AtRisk),
+                Within = g.Count(r => r.SlaStatus == SlaStatus.WithinSla),
+                Met = g.Count(r => r.SlaStatus == SlaStatus.Met),
+                // AVG skips NULLs, so this is the average over resolved tickets only.
+                AverageResolutionSeconds = g.Average(r => r.ResolvedAtUtc == null
+                    ? null
+                    : (double?)EF.Functions.DateDiffSecond(r.CreatedAtUtc, r.ResolvedAtUtc))
+            })
+            .ToListAsync(ct);
+
+        return groups
+            .OrderBy(g => g.Key.AgentName == null) // Unassigned last
+            .ThenBy(g => g.Key.AgentName)
+            .ThenByDescending(g => g.Key.Priority) // Critical first
+            .Select(g =>
+            {
+                var withDueDate = g.Breached + g.AtRisk + g.Within + g.Met;
+
+                return new SlaSummaryRowDto(
+                    groupBy == SlaSummaryGrouping.Agent ? g.Key.AgentName ?? "Unassigned" : g.Key.Priority.ToString()!,
+                    g.Total,
+                    g.Breached,
+                    g.AtRisk,
+                    g.Within,
+                    g.Met,
+                    withDueDate == 0 ? null : Math.Round((double)g.Breached / withDueDate, 4),
+                    g.AverageResolutionSeconds is { } seconds ? Math.Round(seconds / 3600, 2) : null);
+            })
+            .ToList();
     }
 
     private static IQueryable<TicketWithLabels> ApplySort(IQueryable<TicketWithLabels> source, TicketQuery query)
@@ -286,6 +369,52 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
 
         // Keeps paging stable when the sort column has duplicates.
         return sorted.ThenByDescending(x => x.Ticket.Id);
+    }
+
+    /// <summary>now + the at-risk period for each priority and tier; the SLA CASEs pick one per row.</summary>
+    private AtRiskCutOffs AtRiskCutOffsAt(DateTime now)
+    {
+        DateTime CutOff(TicketPriority priority, CustomerTier tier) => now + sla.AtRiskPeriodFor(priority, tier);
+
+        return new AtRiskCutOffs(
+            CriticalStandard: CutOff(TicketPriority.Critical, CustomerTier.Standard),
+            HighStandard: CutOff(TicketPriority.High, CustomerTier.Standard),
+            MediumStandard: CutOff(TicketPriority.Medium, CustomerTier.Standard),
+            LowStandard: CutOff(TicketPriority.Low, CustomerTier.Standard),
+            CriticalPremium: CutOff(TicketPriority.Critical, CustomerTier.Premium),
+            HighPremium: CutOff(TicketPriority.High, CustomerTier.Premium),
+            MediumPremium: CutOff(TicketPriority.Medium, CustomerTier.Premium),
+            LowPremium: CutOff(TicketPriority.Low, CustomerTier.Premium));
+    }
+
+    private sealed record AtRiskCutOffs(
+        DateTime CriticalStandard, DateTime HighStandard, DateTime MediumStandard, DateTime LowStandard,
+        DateTime CriticalPremium, DateTime HighPremium, DateTime MediumPremium, DateTime LowPremium);
+
+    /// <summary>A ticket reduced to what the SLA summary report needs.</summary>
+    private sealed class SlaReportRow
+    {
+        public int? AgentId { get; init; }
+
+        public string? AgentName { get; init; }
+
+        public TicketPriority Priority { get; init; }
+
+        public DateTime CreatedAtUtc { get; init; }
+
+        public DateTime? ResolvedAtUtc { get; init; }
+
+        public SlaStatus SlaStatus { get; init; }
+    }
+
+    /// <summary>The report's group key; only the fields for the chosen grouping are set.</summary>
+    private sealed class SlaGroupKey
+    {
+        public int? AgentId { get; init; }
+
+        public string? AgentName { get; init; }
+
+        public TicketPriority? Priority { get; init; }
     }
 
     private sealed class TicketWithLabels
