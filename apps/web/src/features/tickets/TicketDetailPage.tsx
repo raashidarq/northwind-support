@@ -3,6 +3,7 @@ import { ErrorMessage } from '../../components/ErrorMessage';
 import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import { AssignAgentControl } from './components/AssignAgentControl';
+import { EscalationPanel } from './components/EscalationPanel';
 import { StatusActions } from './components/StatusActions';
 import { TicketSummary } from './components/TicketSummary';
 import { useTicket } from './hooks/useTicket';
@@ -51,6 +52,8 @@ export function TicketDetailPage() {
           </div>
 
           <StatusActions ticket={ticket} onUpdated={setData} />
+
+          <EscalationPanel ticket={ticket} onUpdated={setData} />
         </div>
 
         <aside className="detail-layout__side">

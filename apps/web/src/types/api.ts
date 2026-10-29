@@ -79,6 +79,38 @@ export interface TicketDetail {
   dueAtUtc: string | null;
   resolvedAtUtc: string | null;
   slaStatus: SlaStatus;
+  /** Why the ticket got its priority, due date and owner. Only on the create response. */
+  triage?: Triage | null;
+}
+
+/** Human-readable reasons for each automatic triage decision. */
+export interface Triage {
+  priority: string;
+  slaWindow: string;
+  assignment: string;
+}
+
+export interface TicketEscalation {
+  id: number;
+  fromPriority: TicketPriority;
+  toPriority: TicketPriority;
+  fromAgent: AgentSummary | null;
+  toAgent: AgentSummary | null;
+  fromDueAtUtc: string | null;
+  toDueAtUtc: string;
+  reason: string;
+  escalatedBy: string;
+  escalatedAtUtc: string;
+}
+
+export interface EscalationResult {
+  ticket: TicketDetail;
+  escalation: TicketEscalation;
+}
+
+export interface EscalatePayload {
+  reason: string;
+  escalatedBy: string;
 }
 
 /** Everything the ticket list screen can narrow the results by. */
@@ -90,6 +122,7 @@ export interface TicketFilters {
   customerId?: number;
   assignedAgentId?: number;
   unassignedOnly?: boolean;
+  slaStatus?: SlaStatus;
   page: number;
   pageSize: number;
   sortBy: TicketSortField;

@@ -2,11 +2,13 @@ import type {
   Agent,
   Category,
   CustomerListItem,
+  SlaStatus,
   TicketFilters as Filters,
   TicketPriority,
   TicketStatus,
 } from '../../../types/api';
 import { humanize } from '../../../lib/format';
+import { slaLabels } from './slaLabels';
 
 const statuses: TicketStatus[] = ['New', 'Open', 'InProgress', 'Resolved', 'Closed'];
 const priorities: TicketPriority[] = ['Low', 'Medium', 'High', 'Critical'];
@@ -62,6 +64,26 @@ export function TicketFilters({
             {statuses.map((status) => (
               <option key={status} value={status}>
                 {humanize(status)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label className="field__label" htmlFor="filter-sla">
+            SLA
+          </label>
+          <select
+            id="filter-sla"
+            value={filters.slaStatus ?? ''}
+            onChange={(event) =>
+              onChange({ slaStatus: (event.target.value || undefined) as SlaStatus | undefined })
+            }
+          >
+            <option value="">All SLA states</option>
+            {(Object.keys(slaLabels) as SlaStatus[]).map((sla) => (
+              <option key={sla} value={sla}>
+                {slaLabels[sla].text}
               </option>
             ))}
           </select>

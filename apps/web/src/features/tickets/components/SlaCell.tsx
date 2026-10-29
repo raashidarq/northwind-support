@@ -1,22 +1,16 @@
-import { Badge, type BadgeTone } from '../../../components/Badge';
+import { Badge } from '../../../components/Badge';
 import { formatDateTime } from '../../../lib/format';
 import type { SlaStatus } from '../../../types/api';
-
-const labels: Partial<Record<SlaStatus, { text: string; tone: BadgeTone }>> = {
-  Met: { text: 'Met', tone: 'success' },
-  Breached: { text: 'Breached', tone: 'danger' },
-  WithinSla: { text: 'Within SLA', tone: 'info' },
-  NotApplicable: { text: 'No SLA', tone: 'neutral' },
-};
+import { slaLabels } from './slaLabels';
 
 interface SlaCellProps {
   dueAtUtc: string | null;
   slaStatus: SlaStatus;
 }
 
-/** The due date and where the ticket stands against it, as shown in the ticket list. */
+/** The due date and where the ticket stands against it. Used on the list and the detail page. */
 export function SlaCell({ dueAtUtc, slaStatus }: SlaCellProps) {
-  const label = labels[slaStatus] ?? { text: humanizeStatus(slaStatus), tone: 'neutral' as BadgeTone };
+  const label = slaLabels[slaStatus];
 
   return (
     <div className="sla-cell">
@@ -24,8 +18,4 @@ export function SlaCell({ dueAtUtc, slaStatus }: SlaCellProps) {
       <span className="sla-cell__due">{formatDateTime(dueAtUtc)}</span>
     </div>
   );
-}
-
-function humanizeStatus(status: SlaStatus): string {
-  return status.replace(/([a-z])([A-Z])/g, '$1 $2');
 }
