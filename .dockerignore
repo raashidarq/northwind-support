@@ -1,0 +1,23 @@
+# Keeps the build context small and keeps local files out of the image.
+**/bin/
+**/obj/
+**/node_modules/
+.git/
+.vs/
+.vscode/
+.idea/
+
+# Secrets and local settings: configuration comes from environment variables at run time.
+.env
+.env.*
+**/appsettings.Development.json
+**/appsettings.*.local.json
+**/launchSettings.json
+
+# Not part of the API image.
+apps/web/
+apps/api/tests/
+db/
+spec/
+*.md
+*.pdf

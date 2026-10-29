@@ -5,6 +5,7 @@ using Microsoft.IdentityModel.Tokens;
 using SupportDesk.Application;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Presentation.Auth;
+using SupportDesk.Presentation.Health;
 using SupportDesk.Domain.Aggregates.Tickets;
 using SupportDesk.Infrastructure;
 using SupportDesk.Presentation.Extensions;
@@ -74,6 +75,8 @@ builder.Services
 builder.Services.AddAuthorizationBuilder()
     .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
 
+builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
+
 var app = builder.Build();
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
@@ -93,5 +96,9 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// For Docker and load balancers: 200 "Healthy" when the database answers, 503 when it does not.
+// Open without a token, so it is the one other exception to the fallback policy above.
+app.MapHealthChecks("/health").AllowAnonymous();
 
 app.Run();

@@ -23,5 +23,26 @@ services:
       retries: 12
       start_period: 20s
 
+  # The API, built from apps/api/Dockerfile. `docker compose up --build` gives a migrated, seeded
+  # API on http://localhost:5080. Every setting is passed in here at run time - the image holds
+  # none. The defaults are throwaway local values like the SA password above; override them in .env.
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: supportdesk-api
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      # Development applies the migrations and seeds the demo data on start-up, and turns on Swagger.
+      ASPNETCORE_ENVIRONMENT: "${API_ENVIRONMENT:-Development}"
+      # Reaches SQL Server by its service name on the compose network, not localhost.
+      ConnectionStrings__Default: "Server=sqlserver,1433;Database=SupportDesk;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Local_Dev_Password1};TrustServerCertificate=True;Encrypt=False"
+      Jwt__Key: "${JWT_KEY:-local-docker-only-signing-key-change-me-in-env}"
+      DevSeed__AgentPassword: "${DEV_AGENT_PASSWORD:-Northwind-Dev-2026}"
+    ports:
+      - "5080:8080"
+
 volumes:
   supportdesk-sql:
