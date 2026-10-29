@@ -396,8 +396,8 @@ Development:
   notifications, CI, caching, visual redesign.
 
 ## Time spent
-
-TODO
+Begun Oct 28 - Ended Oct 29 
+Several sessions 
 
 ---
 
