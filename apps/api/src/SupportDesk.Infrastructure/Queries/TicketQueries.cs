@@ -22,11 +22,12 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
     /// </remarks>
     public async Task<PagedResult<TicketListItemDto>> GetPagedAsync(TicketQuery query, CancellationToken ct)
     {
-        var tickets = ApplyFilters(TicketsWithLabels(), query);
+        // One "now" for both the SLA filter and the SLA status shown, so they cannot disagree.
+        var now = clock.UtcNow;
+
+        var tickets = ApplyFilters(TicketsWithLabels(), query, now);
 
         var totalCount = await tickets.CountAsync(ct);
-
-        var now = clock.UtcNow;
 
         var items = await ApplySort(tickets, query)
             .Skip((query.Page - 1) * query.PageSize)
@@ -149,7 +150,7 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
     /// <summary>
     /// One <c>Where</c> per filter that was sent; EF Core joins them with AND into the SQL.
     /// </summary>
-    private static IQueryable<TicketWithLabels> ApplyFilters(IQueryable<TicketWithLabels> source, TicketQuery query)
+    private IQueryable<TicketWithLabels> ApplyFilters(IQueryable<TicketWithLabels> source, TicketQuery query, DateTime now)
     {
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
@@ -190,7 +191,74 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
             source = source.Where(x => x.Ticket.AssignedAgentId == null);
         }
 
+        if (query.SlaStatus is { } slaStatus)
+        {
+            source = ApplySlaFilter(source, slaStatus, now);
+        }
+
         return source;
+    }
+
+    /// <summary>
+    /// The same decisions as <see cref="SlaEvaluator"/>, written as date comparisons so that
+    /// SQL can make them; SQL cannot run the evaluator itself.
+    /// </summary>
+    /// <remarks>
+    /// A ticket is at risk once its due date is no later than now plus its at-risk period, and
+    /// that period differs by priority and customer tier. So the cut-off for each combination is
+    /// worked out here, and SQL picks the right one per row with a CASE. No date arithmetic
+    /// happens in SQL.
+    /// </remarks>
+    private IQueryable<TicketWithLabels> ApplySlaFilter(IQueryable<TicketWithLabels> source, SlaStatus status, DateTime now)
+    {
+        DateTime CutOff(TicketPriority priority, CustomerTier tier) => now + sla.AtRiskPeriodFor(priority, tier);
+
+        var criticalStandard = CutOff(TicketPriority.Critical, CustomerTier.Standard);
+        var highStandard = CutOff(TicketPriority.High, CustomerTier.Standard);
+        var mediumStandard = CutOff(TicketPriority.Medium, CustomerTier.Standard);
+        var lowStandard = CutOff(TicketPriority.Low, CustomerTier.Standard);
+        var criticalPremium = CutOff(TicketPriority.Critical, CustomerTier.Premium);
+        var highPremium = CutOff(TicketPriority.High, CustomerTier.Premium);
+        var mediumPremium = CutOff(TicketPriority.Medium, CustomerTier.Premium);
+        var lowPremium = CutOff(TicketPriority.Low, CustomerTier.Premium);
+
+        return status switch
+        {
+            SlaStatus.NotApplicable => source.Where(x => x.Ticket.DueAtUtc == null),
+
+            SlaStatus.Met => source.Where(x =>
+                x.Ticket.ResolvedAtUtc != null && x.Ticket.ResolvedAtUtc <= x.Ticket.DueAtUtc),
+
+            SlaStatus.Breached => source.Where(x =>
+                (x.Ticket.ResolvedAtUtc != null && x.Ticket.ResolvedAtUtc > x.Ticket.DueAtUtc) ||
+                (x.Ticket.ResolvedAtUtc == null && x.Ticket.DueAtUtc < now)),
+
+            SlaStatus.AtRisk => source.Where(x =>
+                x.Ticket.ResolvedAtUtc == null && x.Ticket.DueAtUtc >= now &&
+                x.Ticket.DueAtUtc <= (x.Customer.Tier == CustomerTier.Premium
+                    ? (x.Ticket.Priority == TicketPriority.Critical ? criticalPremium
+                        : x.Ticket.Priority == TicketPriority.High ? highPremium
+                        : x.Ticket.Priority == TicketPriority.Medium ? mediumPremium
+                        : lowPremium)
+                    : (x.Ticket.Priority == TicketPriority.Critical ? criticalStandard
+                        : x.Ticket.Priority == TicketPriority.High ? highStandard
+                        : x.Ticket.Priority == TicketPriority.Medium ? mediumStandard
+                        : lowStandard))),
+
+            SlaStatus.WithinSla => source.Where(x =>
+                x.Ticket.ResolvedAtUtc == null &&
+                x.Ticket.DueAtUtc > (x.Customer.Tier == CustomerTier.Premium
+                    ? (x.Ticket.Priority == TicketPriority.Critical ? criticalPremium
+                        : x.Ticket.Priority == TicketPriority.High ? highPremium
+                        : x.Ticket.Priority == TicketPriority.Medium ? mediumPremium
+                        : lowPremium)
+                    : (x.Ticket.Priority == TicketPriority.Critical ? criticalStandard
+                        : x.Ticket.Priority == TicketPriority.High ? highStandard
+                        : x.Ticket.Priority == TicketPriority.Medium ? mediumStandard
+                        : lowStandard))),
+
+            _ => source
+        };
     }
 
     private static IQueryable<TicketWithLabels> ApplySort(IQueryable<TicketWithLabels> source, TicketQuery query)

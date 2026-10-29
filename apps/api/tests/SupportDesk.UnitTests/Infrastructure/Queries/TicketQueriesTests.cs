@@ -131,6 +131,32 @@ public sealed class TicketQueriesTests : IDisposable
         Assert.Equal("Alex Turner", history[1].ToAgent?.FullName);
     }
 
+    // 2D: the SLA filter runs in SQL. High priority: Standard 8 h window, at risk in the last
+    // 2 h; Premium 4 h window, at risk in the last 1 h.
+    [Theory]
+    [InlineData(SlaStatus.WithinSla, new[] { "SLA-W", "SLA-WP" })]
+    [InlineData(SlaStatus.AtRisk, new[] { "SLA-R", "SLA-RP" })]
+    [InlineData(SlaStatus.Breached, new[] { "SLA-B", "SLA-BL" })]
+    [InlineData(SlaStatus.Met, new[] { "SLA-M" })]
+    [InlineData(SlaStatus.NotApplicable, new[] { "SLA-N" })]
+    public async Task GetPaged_BySlaStatus_MatchesTheEvaluatorExactly(SlaStatus status, string[] expected)
+    {
+        AddSlaCase("SLA-W", _fabrikam, dueIn: TimeSpan.FromHours(2).Add(TimeSpan.FromSeconds(1)));
+        AddSlaCase("SLA-R", _fabrikam, dueIn: TimeSpan.FromHours(2));
+        AddSlaCase("SLA-WP", _contoso, dueIn: TimeSpan.FromHours(2)); // Premium: same due, still within
+        AddSlaCase("SLA-RP", _contoso, dueIn: TimeSpan.FromHours(1));
+        AddSlaCase("SLA-B", _fabrikam, dueIn: TimeSpan.FromSeconds(-1));
+        AddSlaCase("SLA-M", _fabrikam, dueIn: TimeSpan.FromHours(-1), resolvedBeforeDue: true);
+        AddSlaCase("SLA-BL", _fabrikam, dueIn: TimeSpan.FromHours(-1), resolvedBeforeDue: false);
+        AddSlaCase("SLA-N", _fabrikam, dueIn: null);
+        await _db.SaveChangesAsync();
+
+        var result = await _queries.GetPagedAsync(new TicketQuery { SlaStatus = status, Search = "SLA case" }, default);
+
+        Assert.Equal(expected.Order(), References(result.Items));
+        Assert.All(result.Items, item => Assert.Equal(status, item.SlaStatus));
+    }
+
     [Fact]
     public async Task GetEscalations_ForAnUnknownTicket_IsNull() =>
         Assert.Null(await _queries.GetEscalationsAsync(999, default));
@@ -150,6 +176,34 @@ public sealed class TicketQueriesTests : IDisposable
         }
 
         return ticket;
+    }
+
+    /// <summary>
+    /// A High-priority ticket due <paramref name="dueIn"/> from now (null: no due date), whose
+    /// window started long enough ago for that. Resolved an hour either side of the due date
+    /// when <paramref name="resolvedBeforeDue"/> is given.
+    /// </summary>
+    private void AddSlaCase(string reference, Customer customer, TimeSpan? dueIn, bool? resolvedBeforeDue = null)
+    {
+        var category = _db.Set<Category>().First();
+        var window = TestSla.Policy().WindowFor(TicketPriority.High, customer.Tier);
+        var start = Now + (dueIn ?? TimeSpan.Zero) - window;
+
+        var ticket = Ticket.Raise(
+            reference, "SLA case", "A description long enough to be realistic.", customer.Id, category.Id,
+            TicketPriority.High, start);
+
+        if (dueIn is not null)
+        {
+            ticket.StartSlaWindow(window, start);
+        }
+
+        if (resolvedBeforeDue is { } early)
+        {
+            ticket.ChangeStatus(TicketStatus.Resolved, start + window + TimeSpan.FromHours(early ? -1 : 1));
+        }
+
+        _db.Add(ticket);
     }
 
     /// <summary>Ordered, so a test does not depend on the default sort.</summary>
